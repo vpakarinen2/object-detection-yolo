@@ -1,5 +1,10 @@
 # Object & Pose Detection using YOLO11
 
+## Screenshots
+
+![Annotated Person 1](annotated_person.jpg)
+![Annotated Person 2](annotated_person_3.jpg)
+
 ## Backend
 
 ### Requirements
