@@ -60,3 +60,23 @@ Base URL: `http://127.0.0.1:8000`
 - `GET /api/jobs/{id}`
 - `GET /api/jobs/{id}/result`
 - `GET /api/jobs/{id}/annotated`
+
+## Frontend
+
+### Run
+
+Install deps:
+
+```
+npm install
+```
+
+Start dev server:
+
+```
+npm run dev
+```
+
+## Author
+
+Ville Pakarinen (@vpakarinen2)
