@@ -1,4 +1,4 @@
-# Object & Pose Detection using YOLO11
+# Object & Pose Detection (YOLO11)
 
 ## Screenshots
 
