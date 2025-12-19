@@ -1,6 +1,6 @@
 # Object & Pose Detection using YOLO11
 
-## Backend (FastAPI)
+## Backend
 
 ### Requirements
 
