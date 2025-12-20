@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import cv2
+
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +17,8 @@ from app.db import get_db
 
 
 router = APIRouter(prefix="/api/jobs", tags=["jobs"])
+
+_VIDEO_EXTS = {".mp4", ".mov", ".avi"}
 
 
 def _job_to_out(job: Job) -> JobOut:
@@ -126,6 +130,114 @@ def _suffix_for_content_type(content_type: str) -> str:
     return ""
 
 
+def _suffix_for_video_filename(filename: str | None) -> str:
+    if not filename:
+        return ""
+    return Path(filename).suffix.lower()
+
+
+def _validate_video(dest_path: Path) -> tuple[int, int, float, int, float]:
+    cap = cv2.VideoCapture(str(dest_path))
+    try:
+        if not cap.isOpened():
+            raise HTTPException(status_code=400, detail="Invalid or unsupported video file.")
+
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+        if width <= 0 or height <= 0:
+            raise HTTPException(status_code=400, detail="Invalid video (could not read dimensions).")
+
+        duration_s = 0.0
+        if fps > 0 and frame_count > 0:
+            duration_s = frame_count / fps
+
+        return width, height, fps, frame_count, duration_s
+    finally:
+        cap.release()
+
+
+@router.post("/video", response_model=JobCreateResponse)
+def create_video_job(
+    file: UploadFile = File(...),
+    task_type: TaskType = Form(...),
+    conf: float | None = Form(None),
+    iou: float | None = Form(None),
+    imgsz: int | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    ensure_dirs()
+
+    if conf is not None and not (0.0 <= conf <= 1.0):
+        raise HTTPException(status_code=422, detail="conf must be between 0 and 1")
+    if iou is not None and not (0.0 <= iou <= 1.0):
+        raise HTTPException(status_code=422, detail="iou must be between 0 and 1")
+
+    if imgsz is not None and imgsz <= 0:
+        imgsz = None
+    if imgsz is not None and imgsz < 32:
+        raise HTTPException(status_code=422, detail="imgsz must be >= 32")
+
+    suffix = _suffix_for_video_filename(file.filename)
+    if suffix not in _VIDEO_EXTS:
+        raise HTTPException(status_code=415, detail="Unsupported video type. Allowed: mp4, mov, avi.")
+
+    job = Job(
+        status=JobStatus.uploading,
+        task_type=task_type,
+        created_at=datetime.utcnow(),
+        updated_at=datetime.utcnow(),
+        filename=file.filename or "upload",
+        content_type=file.content_type or "application/octet-stream",
+        size_bytes=0,
+        input_path="",
+        conf=conf,
+        iou=iou,
+        imgsz=imgsz,
+        progress=0,
+    )
+
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    tmp_path = settings.inputs_dir / f"{job.id}.upload"
+    final_path = tmp_path
+
+    try:
+        size_bytes = save_upload(file, tmp_path)
+
+        final_path = settings.inputs_dir / f"{job.id}{suffix}"
+        tmp_path.replace(final_path)
+
+        width, height, fps, frame_count, duration_s = _validate_video(final_path)
+        if duration_s > 60.0:
+            raise HTTPException(status_code=422, detail="Video too long (max 60 seconds).")
+    except HTTPException:
+        if tmp_path.exists():
+            tmp_path.unlink(missing_ok=True)
+        if final_path.exists() and final_path != tmp_path:
+            final_path.unlink(missing_ok=True)
+        db.delete(job)
+        db.commit()
+        raise
+
+    job.size_bytes = size_bytes
+    job.image_width = width
+    job.image_height = height
+    job.input_path = str(final_path)
+    job.status = JobStatus.queued
+    job.updated_at = datetime.utcnow()
+
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    return JobCreateResponse(job=_job_to_out(job))
+
+
 @router.get("/{job_id}", response_model=JobOut)
 def get_job(job_id: str, db: Session = Depends(get_db)):
     job = db.get(Job, job_id)
@@ -161,4 +273,23 @@ def get_job_annotated(job_id: str, db: Session = Depends(get_db)):
     path = Path(job.annotated_image_path)
     if not path.exists():
         raise HTTPException(status_code=404, detail="Annotated image not found")
+    if path.suffix.lower() == ".mp4":
+        raise HTTPException(status_code=404, detail="Annotated image not found")
     return FileResponse(path, media_type="image/jpeg")
+
+
+@router.get("/{job_id}/annotated_video")
+def get_job_annotated_video(job_id: str, db: Session = Depends(get_db)):
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status != JobStatus.succeeded:
+        raise HTTPException(status_code=409, detail=f"Job not ready (status: {job.status.value})")
+    if not job.annotated_image_path:
+        raise HTTPException(status_code=404, detail="Annotated video not found")
+    path = Path(job.annotated_image_path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Annotated video not found")
+    if path.suffix.lower() != ".mp4":
+        raise HTTPException(status_code=404, detail="Annotated video not found")
+    return FileResponse(path, media_type="video/mp4")
