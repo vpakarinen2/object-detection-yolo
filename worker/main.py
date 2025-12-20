@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import shutil
 import json
 import time
 import sys
@@ -46,6 +48,9 @@ COCO17_KEYPOINT_NAMES = [
 ]
 
 
+_VIDEO_EXTS = {".mp4", ".mov", ".avi"}
+
+
 def _load_models() -> tuple[YOLO, YOLO]:
     object_model = YOLO(os.getenv("OBJECT_MODEL_WEIGHTS", settings.object_model_weights))
     pose_model = YOLO(os.getenv("POSE_MODEL_WEIGHTS", settings.pose_model_weights))
@@ -88,6 +93,233 @@ def _write_outputs(job: Job, result_dict: dict, annotated_bgr) -> tuple[str, str
     cv2.imwrite(str(annotated_path), annotated_bgr)
 
     return str(result_path), str(annotated_path)
+
+
+def _is_video_path(input_path: str) -> bool:
+    return Path(input_path).suffix.lower() in _VIDEO_EXTS
+
+
+def _build_object_frame(model: YOLO, r, frame_index: int, timestamp_s: float | None) -> dict:
+    names = r.names if hasattr(r, "names") else model.names
+
+    detections = []
+    if r.boxes is not None and len(r.boxes) > 0:
+        xyxy = r.boxes.xyxy.cpu().numpy()
+        conf = r.boxes.conf.cpu().numpy()
+        cls = r.boxes.cls.cpu().numpy().astype(int)
+        for i in range(len(xyxy)):
+            c = int(cls[i])
+            detections.append(
+                {
+                    "class_id": c,
+                    "class_name": names.get(c, str(c)) if isinstance(names, dict) else names[c],
+                    "confidence": float(conf[i]),
+                    "bbox_xyxy": [float(x) for x in xyxy[i].tolist()],
+                }
+            )
+
+    return {"frame_index": frame_index, "timestamp_s": timestamp_s, "detections": detections}
+
+
+def _build_pose_frame(model: YOLO, r, frame_index: int, timestamp_s: float | None) -> dict:
+    instances = []
+
+    boxes_xyxy = None
+    boxes_conf = None
+    if getattr(r, "boxes", None) is not None and len(r.boxes) > 0:
+        boxes_xyxy = r.boxes.xyxy.cpu().numpy()
+        boxes_conf = r.boxes.conf.cpu().numpy()
+
+    if hasattr(r, "keypoints") and r.keypoints is not None:
+        k_xy = r.keypoints.xy
+        k_conf = getattr(r.keypoints, "conf", None)
+
+        if k_xy is not None and len(k_xy) > 0:
+            k_xy_np = k_xy.cpu().numpy()
+            k_conf_np = k_conf.cpu().numpy() if k_conf is not None else None
+
+            for person_i in range(k_xy_np.shape[0]):
+                keypoints = []
+                for kp_i in range(k_xy_np.shape[1]):
+                    x, y = k_xy_np[person_i, kp_i].tolist()
+                    score = float(k_conf_np[person_i, kp_i]) if k_conf_np is not None else None
+                    keypoints.append(
+                        {
+                            "name": COCO17_KEYPOINT_NAMES[kp_i] if kp_i < len(COCO17_KEYPOINT_NAMES) else str(kp_i),
+                            "x": float(x),
+                            "y": float(y),
+                            "score": score,
+                        }
+                    )
+
+                bbox_xyxy = None
+                conf = None
+                if boxes_xyxy is not None and person_i < len(boxes_xyxy):
+                    bbox_xyxy = [float(x) for x in boxes_xyxy[person_i].tolist()]
+                if boxes_conf is not None and person_i < len(boxes_conf):
+                    conf = float(boxes_conf[person_i])
+
+                instances.append({"confidence": conf, "bbox_xyxy": bbox_xyxy, "keypoints": keypoints})
+
+    return {"frame_index": frame_index, "timestamp_s": timestamp_s, "instances": instances}
+
+
+def _process_video_job(db: Session, job: Job, model: YOLO, model_weights: str) -> None:
+    ensure_dirs()
+
+    cap = cv2.VideoCapture(job.input_path)
+    if not cap.isOpened():
+        raise RuntimeError("Invalid or unsupported video file")
+
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+
+    if width <= 0 or height <= 0:
+        cap.release()
+        raise RuntimeError("Invalid video (could not read dimensions)")
+
+    out_fps = fps if fps > 0 else 30.0
+    duration_s = (frame_count / fps) if (fps > 0 and frame_count > 0) else None
+
+    out_dir = settings.outputs_dir / job.id
+    out_dir.mkdir(parents=True, exist_ok=True)
+    result_path = out_dir / "result.json"
+    annotated_path = out_dir / "annotated.mp4"
+
+    writer = None
+    for fourcc_str in ("avc1", "H264", "X264", "mp4v"):
+        fourcc = cv2.VideoWriter_fourcc(*fourcc_str)
+        w = cv2.VideoWriter(str(annotated_path), fourcc, out_fps, (width, height))
+        if w.isOpened():
+            writer = w
+            break
+        w.release()
+
+    if writer is None:
+        cap.release()
+        raise RuntimeError("Could not create annotated video writer")
+
+    sample_fps = 5.0
+    sample_every = max(1, int(round(out_fps / sample_fps)))
+    sampled_frames: list[dict] = []
+
+    frame_i = 0
+    t0 = time.perf_counter()
+    
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
+
+            predict_kwargs = {
+                "source": frame,
+                "verbose": False,
+            }
+            if job.conf is not None:
+                predict_kwargs["conf"] = job.conf
+            if job.iou is not None:
+                predict_kwargs["iou"] = job.iou
+            if job.imgsz is not None:
+                predict_kwargs["imgsz"] = job.imgsz
+
+            results = model.predict(**predict_kwargs)
+            r = results[0]
+            annotated = r.plot()
+
+            if annotated is None:
+                raise RuntimeError("Failed to render annotated frame")
+
+            h, w = annotated.shape[:2]
+            if (w, h) != (width, height):
+                annotated = cv2.resize(annotated, (width, height), interpolation=cv2.INTER_LINEAR)
+            if annotated.dtype != "uint8":
+                annotated = annotated.astype("uint8")
+
+            writer.write(annotated)
+
+            timestamp_s = (frame_i / out_fps) if out_fps > 0 else None
+            if frame_i % sample_every == 0:
+                if job.task_type == TaskType.object:
+                    sampled_frames.append(_build_object_frame(model, r, frame_i, timestamp_s))
+                else:
+                    sampled_frames.append(_build_pose_frame(model, r, frame_i, timestamp_s))
+
+            if frame_count > 0 and frame_i % 10 == 0:
+                job.progress = int(100 * (frame_i / max(frame_count, 1)))
+                job.updated_at = datetime.utcnow()
+                db.add(job)
+                db.commit()
+
+            frame_i += 1
+    finally:
+        cap.release()
+        if writer is not None:
+            writer.release()
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is not None:
+        tmp_path = out_dir / "annotated_h264.mp4"
+        proc = subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-i",
+                str(annotated_path),
+                "-an",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-movflags",
+                "+faststart",
+                str(tmp_path),
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        if proc.returncode == 0 and tmp_path.exists() and tmp_path.stat().st_size > 0:
+            annotated_path.unlink(missing_ok=True)
+            tmp_path.replace(annotated_path)
+
+    inference_ms_total = (time.perf_counter() - t0) * 1000.0
+    avg_inference_ms = (inference_ms_total / frame_i) if frame_i > 0 else None
+
+    payload: dict = {
+        "meta": {
+            "job_id": job.id,
+            "task_type": job.task_type.value,
+            "model_weights": model_weights,
+            "created_at": job.created_at.isoformat(),
+            "params": {"conf": job.conf, "iou": job.iou, "imgsz": job.imgsz},
+        },
+        "video": {
+            "width": width,
+            "height": height,
+            "fps": out_fps,
+            "frame_count": frame_count if frame_count > 0 else frame_i,
+            "duration_s": duration_s,
+            "json_sample_fps": sample_fps,
+        },
+        "runtime": {
+            "inference_ms_total": inference_ms_total,
+            "avg_inference_ms": avg_inference_ms,
+        },
+        "frames": sampled_frames,
+    }
+
+    result_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    job.status = JobStatus.succeeded
+    job.progress = 100
+    job.result_json_path = str(result_path)
+    job.annotated_image_path = str(annotated_path)
+    job.updated_at = datetime.utcnow()
+
+    db.add(job)
+    db.commit()
 
 
 def _build_object_result(job: Job, model: YOLO, model_weights: str, r, inference_ms: float) -> dict:
@@ -195,6 +427,10 @@ def _process_job(db: Session, job: Job, object_model: YOLO, pose_model: YOLO) ->
     else:
         model = pose_model
         model_weights = settings.pose_model_weights
+
+    if _is_video_path(job.input_path):
+        _process_video_job(db, job, model, model_weights)
+        return
 
     predict_kwargs = {
         "source": job.input_path,
