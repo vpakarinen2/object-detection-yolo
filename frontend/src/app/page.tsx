@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { createJob } from "@/lib/api";
+import { createJob, createVideoJob } from "@/lib/api";
 import type { TaskType } from "@/lib/types";
 
 const MAX_BYTES = 100 * 1024 * 1024;
@@ -25,6 +25,13 @@ export default function HomePage() {
     return true;
   }, [file]);
 
+  const isVideo = useMemo(() => {
+    if (!file) return false;
+    if (file.type && file.type.startsWith("video/")) return true;
+    const name = file.name.toLowerCase();
+    return name.endsWith(".mp4") || name.endsWith(".mov") || name.endsWith(".avi");
+  }, [file]);
+
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
@@ -32,13 +39,21 @@ export default function HomePage() {
 
     setBusy(true);
     try {
-      const resp = await createJob({
-        file,
-        taskType,
-        conf,
-        iou,
-        imgsz
-      });
+      const resp = isVideo
+        ? await createVideoJob({
+            file,
+            taskType,
+            conf,
+            iou,
+            imgsz
+          })
+        : await createJob({
+            file,
+            taskType,
+            conf,
+            iou,
+            imgsz
+          });
       router.push(`/jobs/${resp.job.id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -51,15 +66,14 @@ export default function HomePage() {
     <div className="space-y-8 pt-2">
       <div className="rounded-2xl border border-white/10 bg-white/5 p-7">
         <div className="text-base font-semibold">New job</div>
-        <div className="mt-1 text-sm text-white/70">Upload a JPG/PNG/WebP image</div>
 
         <form className="mt-5 space-y-4" onSubmit={onSubmit}>
           <div>
-            <label className="block text-sm text-white/80">Image</label>
+            <label className="block text-sm text-white/80">Image or video (max. 100mb)</label>
             <input
               className="mt-2 block w-full rounded-md border border-white/10 bg-black/20 px-3 py-2 text-sm"
               type="file"
-              accept="image/jpeg,image/png,image/webp"
+              accept="image/jpeg,image/png,image/webp,video/mp4,video/quicktime,video/x-msvideo,.mp4,.mov,.avi"
               onChange={(e) => setFile(e.target.files?.[0] || null)}
             />
             {file && file.size > MAX_BYTES ? (
