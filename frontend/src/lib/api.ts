@@ -33,6 +33,33 @@ export async function createJob(params: {
   return (await res.json()) as JobCreateResponse;
 }
 
+export async function createVideoJob(params: {
+  file: File;
+  taskType: TaskType;
+  conf?: string;
+  iou?: string;
+  imgsz?: string;
+}): Promise<JobCreateResponse> {
+  const fd = new FormData();
+  fd.append("file", params.file);
+  fd.append("task_type", params.taskType);
+  if (params.conf !== undefined && params.conf !== "") fd.append("conf", params.conf);
+  if (params.iou !== undefined && params.iou !== "") fd.append("iou", params.iou);
+  if (params.imgsz !== undefined && params.imgsz !== "") fd.append("imgsz", params.imgsz);
+
+  const res = await fetch(`${apiBase()}/api/jobs/video`, {
+    method: "POST",
+    body: fd
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Create video job failed (${res.status}): ${text}`);
+  }
+
+  return (await res.json()) as JobCreateResponse;
+}
+
 export async function getJob(jobId: string): Promise<JobOut> {
   const res = await fetch(`${apiBase()}/api/jobs/${jobId}`, { cache: "no-store" });
   if (!res.ok) {
@@ -53,6 +80,10 @@ export async function getJobResult(jobId: string): Promise<unknown> {
 
 export function annotatedUrl(jobId: string): string {
   return `${apiBase()}/api/jobs/${jobId}/annotated`;
+}
+
+export function annotatedVideoUrl(jobId: string): string {
+  return `${apiBase()}/api/jobs/${jobId}/annotated_video`;
 }
 
 export function resultUrl(jobId: string): string {
