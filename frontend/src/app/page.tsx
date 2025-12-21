@@ -11,13 +11,14 @@ const MAX_BYTES = 100 * 1024 * 1024;
 export default function HomePage() {
   const router = useRouter();
 
-  const [file, setFile] = useState<File | null>(null);
   const [taskType, setTaskType] = useState<TaskType>("object");
+  const [error, setError] = useState<string | null>(null);
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  const [imgsz, setImgsz] = useState("640");
   const [conf, setConf] = useState("0.25");
   const [iou, setIou] = useState("0.7");
-  const [imgsz, setImgsz] = useState("640");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   const canSubmit = useMemo(() => {
     if (!file) return false;
@@ -143,3 +144,4 @@ export default function HomePage() {
     </div>
   );
 }
+
