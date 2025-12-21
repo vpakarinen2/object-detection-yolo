@@ -16,6 +16,7 @@ export async function createJob(params: {
   const fd = new FormData();
   fd.append("file", params.file);
   fd.append("task_type", params.taskType);
+  
   if (params.conf !== undefined && params.conf !== "") fd.append("conf", params.conf);
   if (params.iou !== undefined && params.iou !== "") fd.append("iou", params.iou);
   if (params.imgsz !== undefined && params.imgsz !== "") fd.append("imgsz", params.imgsz);
@@ -43,6 +44,7 @@ export async function createVideoJob(params: {
   const fd = new FormData();
   fd.append("file", params.file);
   fd.append("task_type", params.taskType);
+  
   if (params.conf !== undefined && params.conf !== "") fd.append("conf", params.conf);
   if (params.iou !== undefined && params.iou !== "") fd.append("iou", params.iou);
   if (params.imgsz !== undefined && params.imgsz !== "") fd.append("imgsz", params.imgsz);
