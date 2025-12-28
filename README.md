@@ -14,18 +14,18 @@
 
 ### Setup
 
-Create env:
+Create environment:
 ```
 python -m venv .venv
 ```
 
-Activate env:
+Activate environment:
 
 ```
 .\.venv\Scripts\Activate.ps1
 ```
 
-Install deps:
+Install dependencies:
 
 ```
 pip install -r requirements.txt
@@ -70,7 +70,7 @@ Base URL: `http://127.0.0.1:8000`
 
 ### Setup
 
-Install deps:
+Install dependencies:
 
 ```
 npm install
