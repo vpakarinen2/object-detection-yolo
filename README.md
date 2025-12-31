@@ -2,8 +2,8 @@
 
 ## Screenshots
 
-![Annotated Person 1](annotated_person.jpg)
-![Annotated Person 2](annotated_person_3.jpg)
+![Annotated Person 1](object_detection_create_job.png)
+![Annotated Person 2](object_detection_results.png)
 
 ## Backend
 
