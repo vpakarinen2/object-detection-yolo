@@ -4,6 +4,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.routes.jobs import router as jobs_router
+from app.routes.live import router as live_router
+
 from app.storage import ensure_dirs
 from app.settings import settings
 from app.models import Base
@@ -29,3 +31,4 @@ app.add_middleware(
 )
 
 app.include_router(jobs_router)
+app.include_router(live_router)
