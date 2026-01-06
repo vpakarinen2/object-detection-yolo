@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
 import { createJob, createVideoJob } from "@/lib/api";
 import type { TaskType } from "@/lib/types";
@@ -66,7 +67,15 @@ export default function HomePage() {
   return (
     <div className="space-y-8 pt-2">
       <div className="rounded-2xl border border-white/10 bg-white/5 p-7">
-        <div className="text-base font-semibold">New job</div>
+        <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div className="text-base font-semibold">New job</div>
+          <Link
+            className="inline-flex items-center justify-center rounded-md bg-white/10 px-4 py-2 text-sm font-medium text-white"
+            href="/live"
+          >
+            Webcam (real-time)
+          </Link>
+        </div>
 
         <form className="mt-5 space-y-4" onSubmit={onSubmit}>
           <div>
@@ -144,4 +153,3 @@ export default function HomePage() {
     </div>
   );
 }
-
