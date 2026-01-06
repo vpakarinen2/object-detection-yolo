@@ -2,7 +2,7 @@
 
 ## Screenshots
 
-![Annotated Person 1](object_detection_create_job.png)
+![Annotated Person 1](object_detection_create_job_2.png)
 ![Annotated Person 2](object_detection_results.png)
 
 ## Backend
